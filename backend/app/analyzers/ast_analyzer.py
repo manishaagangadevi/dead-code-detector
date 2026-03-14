@@ -1,3 +1,6 @@
+# Dead Code Analyzer - Uses Python AST to detect unused functions,
+# variables, and unreachable code blocks
+# Version 1.1 - Added support for async functions
 import ast
 import json
 from typing import Any
