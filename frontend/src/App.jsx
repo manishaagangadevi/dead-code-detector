@@ -43,6 +43,8 @@ export default function App() {
   const [expandedItems, setExpandedItems] = useState({});
   const [wsStatus, setWsStatus] = useState("disconnected");
   const [liveIssues, setLiveIssues] = useState([]);
+  const [projectFiles, setProjectFiles] = useState([]);
+  const [analysisMode, setAnalysisMode] = useState("single");
   const wsRef = useRef(null);
   const cyRef = useRef(null);
   const editorRef = useRef(null);
@@ -90,7 +92,6 @@ export default function App() {
     if (!editorRef.current) return;
     const monaco = window.monaco;
     if (!monaco) return;
-
     const decorations = items.map((item) => ({
       range: new monaco.Range(item.line_start, 1, item.line_end, 1),
       options: {
@@ -103,7 +104,6 @@ export default function App() {
         },
       },
     }));
-
     decorationsRef.current = editorRef.current.deltaDecorations(
       decorationsRef.current,
       decorations
@@ -111,23 +111,44 @@ export default function App() {
   };
 
   const analyzeCode = async () => {
-    if (!code.trim()) return toast.error("Please enter some code first!");
-    setLoading(true);
-    setResult(null);
-    try {
-      const res = await axios.post(`${API}/api/analyze`, { code, language });
-      setResult(res.data);
-      setActiveTab("issues");
-      highlightDeadLines(res.data.dead_code_items);
-      if (res.data.dead_count === 0) {
-        toast.success("No dead code found! Clean codebase!");
-      } else {
-        toast.error(`Found ${res.data.dead_count} dead code issues!`);
+    if (analysisMode === "project" && projectFiles.length > 0) {
+      setLoading(true);
+      setResult(null);
+      try {
+        const res = await axios.post(`${API}/api/analyze-project`, {
+          files: projectFiles,
+          language,
+        });
+        setResult({ ...res.data, isProject: true });
+        setActiveTab("issues");
+        if (res.data.dead_count === 0) {
+          toast.success("No dead code found across all files!");
+        } else {
+          toast.error(`Found ${res.data.dead_count} issues across ${res.data.total_files} files!`);
+        }
+      } catch (e) {
+        toast.error("Analysis failed. Is the backend running?");
       }
-    } catch (e) {
-      toast.error("Analysis failed. Is the backend running?");
+      setLoading(false);
+    } else {
+      if (!code.trim()) return toast.error("Please enter some code first!");
+      setLoading(true);
+      setResult(null);
+      try {
+        const res = await axios.post(`${API}/api/analyze`, { code, language });
+        setResult(res.data);
+        setActiveTab("issues");
+        highlightDeadLines(res.data.dead_code_items);
+        if (res.data.dead_count === 0) {
+          toast.success("No dead code found! Clean codebase!");
+        } else {
+          toast.error(`Found ${res.data.dead_count} dead code issues!`);
+        }
+      } catch (e) {
+        toast.error("Analysis failed. Is the backend running?");
+      }
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const exportPDF = async () => {
@@ -136,36 +157,33 @@ export default function App() {
 
     doc.setFillColor(15, 17, 23);
     doc.rect(0, 0, 210, 297, "F");
-
     doc.setTextColor(129, 140, 248);
     doc.setFontSize(20);
     doc.setFont("helvetica", "bold");
     doc.text("Dead Code Detection Report", 20, 25);
-
     doc.setTextColor(107, 114, 128);
     doc.setFontSize(10);
     doc.text(`Generated: ${new Date().toLocaleString()}`, 20, 33);
     doc.text(`Language: ${language}`, 20, 39);
-
+    doc.text(`Mode: ${result?.isProject ? "Multi-file Project" : "Single File"}`, 20, 45);
     doc.setDrawColor(45, 49, 72);
-    doc.line(20, 43, 190, 43);
+    doc.line(20, 49, 190, 49);
 
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(13);
     doc.setFont("helvetica", "bold");
-    doc.text("Summary", 20, 52);
+    doc.text("Summary", 20, 58);
 
     const stats = [
-      ["Total Lines", result.total_lines],
-      ["Dead Issues Found", result.dead_count],
-      ["Dead Functions", result.summary.dead_functions],
-      ["Dead Variables", result.summary.dead_variables],
-      ["Unreachable Blocks", result.summary.unreachable_blocks],
-      ["Functions Defined", result.defined_functions.length],
+      ["Total Dead Issues", result.dead_count],
+      ["Dead Functions", result.summary?.dead_functions || 0],
+      ["Dead Variables", result.summary?.dead_variables || 0],
+      ["Unreachable Blocks", result.summary?.unreachable_blocks || 0],
+      ["Files Analyzed", result.total_files || 1],
     ];
 
     stats.forEach(([label, value], i) => {
-      const y = 62 + i * 10;
+      const y = 68 + i * 10;
       doc.setFontSize(10);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(156, 163, 175);
@@ -176,34 +194,37 @@ export default function App() {
     });
 
     doc.setDrawColor(45, 49, 72);
-    doc.line(20, 128, 190, 128);
-
+    doc.line(20, 120, 190, 120);
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(13);
     doc.setFont("helvetica", "bold");
-    doc.text("Dead Code Issues", 20, 138);
+    doc.text("Dead Code Issues", 20, 130);
 
-    let y = 148;
+    let y = 142;
     result.dead_code_items.forEach((item, i) => {
-      if (y > 260) {
+      if (y > 255) {
         doc.addPage();
         doc.setFillColor(15, 17, 23);
         doc.rect(0, 0, 210, 297, "F");
         y = 20;
       }
-
       const color = item.severity === "high" ? [239, 68, 68] : [245, 158, 11];
       doc.setFillColor(...color);
       doc.roundedRect(20, y - 5, 170, 8, 2, 2, "F");
-
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(9);
       doc.setFont("helvetica", "bold");
       doc.text(`${i + 1}. ${item.name} — Line ${item.line_start}`, 24, y);
       doc.setFont("helvetica", "normal");
-      doc.text(`[${item.severity.toUpperCase()}]`, 170, y);
+      doc.text(`[${item.severity?.toUpperCase()}]`, 170, y);
       y += 12;
 
+      if (item.file) {
+        doc.setTextColor(124, 58, 237);
+        doc.setFontSize(8);
+        doc.text(`File: ${item.file}`, 25, y);
+        y += 6;
+      }
       if (item.message) {
         doc.setTextColor(156, 163, 175);
         doc.setFontSize(8);
@@ -211,7 +232,6 @@ export default function App() {
         doc.text(lines, 25, y);
         y += lines.length * 5 + 3;
       }
-
       if (item.ai_explanation) {
         doc.setTextColor(129, 140, 248);
         doc.setFontSize(8);
@@ -224,7 +244,6 @@ export default function App() {
         doc.text(aiLines, 25, y);
         y += aiLines.length * 5 + 4;
       }
-
       if (item.fix_suggestion) {
         doc.setTextColor(34, 197, 94);
         doc.setFontSize(8);
@@ -328,7 +347,7 @@ export default function App() {
   }, [activeTab, result]);
 
   const healthScore = result
-    ? Math.max(0, Math.round(100 - (result.dead_count / Math.max(1, result.defined_functions.length)) * 100))
+    ? Math.max(0, Math.round(100 - (result.dead_count / Math.max(1, (result.defined_functions?.length || result.summary?.files_analyzed || 1))) * 100))
     : 0;
 
   return (
@@ -373,7 +392,7 @@ export default function App() {
               Dead Code Detector
             </h1>
             <p style={{ fontSize: 11, color: "#6b7280" }}>
-              AI-Powered • Tree-sitter • LLM Analysis
+              AI-Powered • Tree-sitter • Cross-File Analysis
             </p>
           </div>
         </div>
@@ -386,7 +405,7 @@ export default function App() {
               background: wsStatus === "connected" ? "#22c55e" : "#ef4444",
             }} />
             <span style={{ fontSize: 12, color: "#9ca3af" }}>
-              {wsStatus === "connected" ? "Live Analysis ON" : "Connecting..."}
+              {wsStatus === "connected" ? "Live ON" : "Connecting..."}
             </span>
           </div>
 
@@ -404,9 +423,10 @@ export default function App() {
             <option value="javascript">JavaScript</option>
           </select>
 
-          {/* File Upload */}
+          {/* Single file upload */}
           <label style={{
-            background: "#252836", border: "1px solid #2d3148",
+            background: analysisMode === "single" ? "#252836" : "#1a1d27",
+            border: "1px solid #2d3148",
             color: "#e0e0e0", padding: "7px 14px", borderRadius: 8,
             fontSize: 13, cursor: "pointer", display: "flex",
             alignItems: "center", gap: 6,
@@ -422,7 +442,44 @@ export default function App() {
                 const reader = new FileReader();
                 reader.onload = (ev) => setCode(ev.target.result);
                 reader.readAsText(file);
+                setAnalysisMode("single");
+                setProjectFiles([]);
                 toast.success(`Loaded: ${file.name}`);
+              }}
+            />
+          </label>
+
+          {/* Multi file upload */}
+          <label style={{
+            background: analysisMode === "project" ? "#4f46e5" : "#252836",
+            border: "1px solid #2d3148",
+            color: "#e0e0e0", padding: "7px 14px", borderRadius: 8,
+            fontSize: 13, cursor: "pointer", display: "flex",
+            alignItems: "center", gap: 6,
+          }}>
+            <GitBranch size={14} />
+            {projectFiles.length > 0 ? `${projectFiles.length} files loaded` : "Upload Project"}
+            <input
+              type="file"
+              accept=".py,.js,.ts"
+              multiple
+              style={{ display: "none" }}
+              onChange={async (e) => {
+                const files = Array.from(e.target.files);
+                const loaded = await Promise.all(
+                  files.map(
+                    (file) =>
+                      new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = (ev) =>
+                          resolve({ filename: file.name, code: ev.target.result });
+                        reader.readAsText(file);
+                      })
+                  )
+                );
+                setProjectFiles(loaded);
+                setAnalysisMode("project");
+                toast.success(`Loaded ${loaded.length} files for cross-file analysis!`);
               }}
             />
           </label>
@@ -462,6 +519,44 @@ export default function App() {
         </div>
       </div>
 
+      {/* Mode banner */}
+      {analysisMode === "project" && projectFiles.length > 0 && (
+        <div style={{
+          background: "#1e1b4b", borderBottom: "1px solid #4f46e5",
+          padding: "8px 24px", display: "flex", alignItems: "center",
+          justifyContent: "space-between", flexShrink: 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <GitBranch size={14} color="#818cf8" />
+            <span style={{ fontSize: 13, color: "#818cf8", fontWeight: 600 }}>
+              Cross-File Project Mode
+            </span>
+            <span style={{ fontSize: 12, color: "#6b7280" }}>
+              — analyzing {projectFiles.length} files together
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {projectFiles.map((f, i) => (
+              <span key={i} style={{
+                background: "#252836", color: "#a5b4fc",
+                padding: "2px 8px", borderRadius: 20, fontSize: 11,
+              }}>
+                {f.filename}
+              </span>
+            ))}
+          </div>
+          <button
+            onClick={() => { setProjectFiles([]); setAnalysisMode("single"); }}
+            style={{
+              background: "transparent", border: "none",
+              color: "#6b7280", cursor: "pointer", fontSize: 12,
+            }}
+          >
+            ✕ Clear
+          </button>
+        </div>
+      )}
+
       {/* Main */}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
@@ -473,36 +568,78 @@ export default function App() {
             alignItems: "center", justifyContent: "space-between", flexShrink: 0,
           }}>
             <span style={{ fontSize: 13, color: "#9ca3af", display: "flex", alignItems: "center", gap: 6 }}>
-              <FileCode size={14} /> Code Editor
+              <FileCode size={14} />
+              {analysisMode === "project" ? "Project Files Loaded" : "Code Editor"}
             </span>
-            {liveIssues.length > 0 && (
-              <span style={{
-                background: "#ef444422", color: "#ef4444",
-                padding: "2px 10px", borderRadius: 20, fontSize: 12,
-              }}>
-                ⚡ {liveIssues.length} live issues
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {liveIssues.length > 0 && analysisMode === "single" && (
+                <span style={{
+                  background: "#ef444422", color: "#ef4444",
+                  padding: "2px 10px", borderRadius: 20, fontSize: 12,
+                }}>
+                  ⚡ {liveIssues.length} live issues
+                </span>
+              )}
+              <span style={{ fontSize: 12, color: "#4b5563" }}>
+                {code.split("\n").length} lines
               </span>
-            )}
+            </div>
           </div>
-          <div style={{ flex: 1, overflow: "hidden" }}>
-            <Editor
-              height="100%"
-              language={language}
-              value={code}
-              onChange={handleCodeChange}
-              onMount={handleEditorMount}
-              theme="vs-dark"
-              options={{
-                fontSize: 14,
-                minimap: { enabled: true },
-                lineNumbers: "on",
-                scrollBeyondLastLine: false,
-                automaticLayout: true,
-                padding: { top: 12 },
-                glyphMargin: true,
-              }}
-            />
-          </div>
+
+          {analysisMode === "project" ? (
+            <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
+              <p style={{ color: "#6b7280", fontSize: 13, marginBottom: 12 }}>
+                Files loaded for cross-file analysis:
+              </p>
+              {projectFiles.map((f, i) => (
+                <div key={i} style={{
+                  background: "#1a1d27", borderRadius: 8, marginBottom: 8,
+                  border: "1px solid #2d3148", overflow: "hidden",
+                }}>
+                  <div style={{
+                    padding: "8px 12px", display: "flex",
+                    alignItems: "center", justifyContent: "space-between",
+                    borderBottom: "1px solid #2d3148",
+                  }}>
+                    <span style={{ fontSize: 13, color: "#a5b4fc", fontWeight: 600 }}>
+                      📄 {f.filename}
+                    </span>
+                    <span style={{ fontSize: 11, color: "#4b5563" }}>
+                      {f.code.split("\n").length} lines
+                    </span>
+                  </div>
+                  <pre style={{
+                    padding: "10px 12px", fontSize: 12,
+                    color: "#6b7280", maxHeight: 120,
+                    overflow: "auto", margin: 0,
+                    fontFamily: "monospace",
+                  }}>
+                    {f.code.slice(0, 300)}{f.code.length > 300 ? "..." : ""}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ flex: 1, overflow: "hidden" }}>
+              <Editor
+                height="100%"
+                language={language}
+                value={code}
+                onChange={handleCodeChange}
+                onMount={handleEditorMount}
+                theme="vs-dark"
+                options={{
+                  fontSize: 14,
+                  minimap: { enabled: true },
+                  lineNumbers: "on",
+                  scrollBeyondLastLine: false,
+                  automaticLayout: true,
+                  padding: { top: 12 },
+                  glyphMargin: true,
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {/* Right — Results */}
@@ -554,7 +691,11 @@ export default function App() {
                 <p style={{ fontSize: 15 }}>
                   Click <strong style={{ color: "#818cf8" }}>Analyze</strong> to detect dead code
                 </p>
-                <p style={{ fontSize: 12, marginTop: 8 }}>AI will explain each issue found</p>
+                <p style={{ fontSize: 12, marginTop: 8 }}>
+                  {analysisMode === "project"
+                    ? `${projectFiles.length} files ready for cross-file analysis`
+                    : "AI will explain each issue found"}
+                </p>
               </div>
             )}
 
@@ -566,9 +707,15 @@ export default function App() {
                   borderTop: "3px solid #818cf8", borderRadius: "50%",
                   margin: "0 auto 16px", animation: "spin 1s linear infinite",
                 }} />
-                <p style={{ color: "#9ca3af" }}>AI is analyzing your code...</p>
+                <p style={{ color: "#9ca3af" }}>
+                  {analysisMode === "project"
+                    ? "Analyzing all files together..."
+                    : "AI is analyzing your code..."}
+                </p>
                 <p style={{ fontSize: 12, color: "#4b5563", marginTop: 6 }}>
-                  This may take a few seconds
+                  {analysisMode === "project"
+                    ? "Building global symbol table → Cross-file analysis → AI explanations"
+                    : "AST analysis → Call graph → AI explanations"}
                 </p>
                 <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
               </div>
@@ -577,6 +724,19 @@ export default function App() {
             {/* Issues Tab */}
             {result && activeTab === "issues" && (
               <div>
+                {result.isProject && (
+                  <div style={{
+                    background: "#1e1b4b", borderRadius: 8, padding: "8px 12px",
+                    marginBottom: 12, border: "1px solid #4f46e5",
+                    display: "flex", alignItems: "center", gap: 8,
+                  }}>
+                    <GitBranch size={14} color="#818cf8" />
+                    <span style={{ fontSize: 12, color: "#818cf8" }}>
+                      Cross-file analysis — {result.total_files} files analyzed
+                    </span>
+                  </div>
+                )}
+
                 {result.dead_code_items.length === 0 ? (
                   <div style={{ textAlign: "center", marginTop: 40 }}>
                     <CheckCircle size={48} color="#22c55e" style={{ margin: "0 auto 12px" }} />
@@ -612,14 +772,17 @@ export default function App() {
                               {item.name}
                             </p>
                             <p style={{ fontSize: 11, color: "#6b7280" }}>
+                              {item.file && (
+                                <span style={{ color: "#7c3aed", marginRight: 4 }}>
+                                  📄 {item.file}
+                                </span>
+                              )}
                               Line {item.line_start}
                               {item.line_end !== item.line_start && `–${item.line_end}`}
                               {" • "}
                               <span style={{ color: getSeverityColor(item.severity) }}>
                                 {item.severity}
                               </span>
-                              {" • "}
-                              {item.type.replace(/_/g, " ")}
                             </p>
                           </div>
                         </div>
@@ -671,16 +834,17 @@ export default function App() {
             {result && activeTab === "graph" && (
               <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
                 <div style={{
-                  padding: "8px 16px", display: "flex", gap: 16,
+                  padding: "8px 16px", display: "flex", gap: 12, flexWrap: "wrap",
                   alignItems: "center", background: "#1a1d27",
                   borderBottom: "1px solid #2d3148", flexShrink: 0,
                 }}>
                   {[
-                    { color: "#E53935", label: "Dead function" },
-                    { color: "#1E88E5", label: "Active function" },
-                    { color: "#4CAF50", label: "Entry point" },
+                    { color: "#E53935", label: "Dead" },
+                    { color: "#1E88E5", label: "Active" },
+                    { color: "#4CAF50", label: "Entry" },
+                    { color: "#7c3aed", label: "File" },
                   ].map((item) => (
-                    <span key={item.label} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#9ca3af" }}>
+                    <span key={item.label} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#9ca3af" }}>
                       <span style={{
                         width: 10, height: 10, borderRadius: 3,
                         background: item.color, display: "inline-block",
@@ -724,13 +888,34 @@ export default function App() {
             {/* Summary Tab */}
             {result && activeTab === "summary" && (
               <div>
+                {result.isProject && (
+                  <div style={{
+                    background: "#1e1b4b", borderRadius: 8, padding: "8px 12px",
+                    marginBottom: 12, border: "1px solid #4f46e5",
+                  }}>
+                    <p style={{ fontSize: 12, color: "#818cf8", fontWeight: 600, marginBottom: 6 }}>
+                      📁 Files Analyzed
+                    </p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {result.files_analyzed?.map((f, i) => (
+                        <span key={i} style={{
+                          background: "#252836", color: "#a5b4fc",
+                          padding: "2px 8px", borderRadius: 20, fontSize: 11,
+                        }}>
+                          {f}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {[
-                  { label: "Total Lines", value: result.total_lines, color: "#818cf8" },
-                  { label: "Dead Issues Found", value: result.dead_count, color: "#ef4444" },
-                  { label: "Dead Functions", value: result.summary.dead_functions, color: "#f59e0b" },
-                  { label: "Dead Variables", value: result.summary.dead_variables, color: "#f59e0b" },
-                  { label: "Unreachable Blocks", value: result.summary.unreachable_blocks, color: "#ef4444" },
-                  { label: "Functions Defined", value: result.defined_functions.length, color: "#22c55e" },
+                  { label: "Total Dead Issues", value: result.dead_count, color: "#ef4444" },
+                  { label: "Dead Functions", value: result.summary?.dead_functions || 0, color: "#f59e0b" },
+                  { label: "Dead Variables", value: result.summary?.dead_variables || 0, color: "#f59e0b" },
+                  { label: "Unreachable Blocks", value: result.summary?.unreachable_blocks || 0, color: "#ef4444" },
+                  { label: "Files Analyzed", value: result.total_files || 1, color: "#7c3aed" },
+                  { label: "Functions Defined", value: result.defined_functions?.length || result.global_functions?.length || 0, color: "#22c55e" },
                 ].map((stat, i) => (
                   <div
                     key={i}
@@ -751,28 +936,6 @@ export default function App() {
                   background: "#1a1d27", borderRadius: 10, padding: 14,
                   marginTop: 8, border: "1px solid #2d3148",
                 }}>
-                  <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-                    Functions Defined
-                  </p>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {result.defined_functions.map((fn, i) => (
-                      <span
-                        key={i}
-                        style={{
-                          background: "#252836", color: "#818cf8",
-                          padding: "3px 10px", borderRadius: 20, fontSize: 12,
-                        }}
-                      >
-                        {fn}()
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                <div style={{
-                  background: "#1a1d27", borderRadius: 10, padding: 14,
-                  marginTop: 8, border: "1px solid #2d3148",
-                }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                     <p style={{ fontSize: 12, color: "#6b7280" }}>Code Health Score</p>
                     <span style={{
@@ -782,10 +945,7 @@ export default function App() {
                       {healthScore}%
                     </span>
                   </div>
-                  <div style={{
-                    height: 8, background: "#2d3148",
-                    borderRadius: 4, overflow: "hidden",
-                  }}>
+                  <div style={{ height: 8, background: "#2d3148", borderRadius: 4, overflow: "hidden" }}>
                     <div style={{
                       height: "100%",
                       width: `${healthScore}%`,
