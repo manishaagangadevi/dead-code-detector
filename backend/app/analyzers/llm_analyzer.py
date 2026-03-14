@@ -1,3 +1,7 @@
+# LLM Analyzer - Integrates Groq AI to explain dead code
+# Uses llama-3.3-70b-versatile model for intelligent explanations
+# Version 1.1 - Improved prompts for better explanations
+
 import os
 from groq import Groq
 from dotenv import load_dotenv
