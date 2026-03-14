@@ -421,6 +421,7 @@ export default function App() {
           >
             <option value="python">Python</option>
             <option value="javascript">JavaScript</option>
+            <option value="typescript">TypeScript</option>
           </select>
 
           {/* Single file upload */}
