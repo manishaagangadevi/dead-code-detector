@@ -8,7 +8,7 @@ import {
   Zap, FileCode, Brain, ChevronDown, ChevronUp
 } from "lucide-react";
 
-const API = "http://127.0.0.1:8000";
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 const SAMPLE_CODE = `# Sample Python code with dead code
 import os
@@ -57,7 +57,10 @@ export default function App() {
 
   const connectWebSocket = () => {
     try {
-      const ws = new WebSocket("ws://127.0.0.1:8000/ws/analyze");
+      const wsUrl = import.meta.env.VITE_API_URL
+        ? import.meta.env.VITE_API_URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws/analyze"
+        : "ws://127.0.0.1:8000/ws/analyze";
+          const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
       ws.onopen = () => setWsStatus("connected");
       ws.onclose = () => {
